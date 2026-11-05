@@ -20,9 +20,20 @@ def execute_query(engine: Engine, query: str) -> None:
         conn.execute(text(query))
 
 
-def execute_sql_file(engine: Engine, sqlfile: pathlib.Path) -> None:
+def execute_sql_file(
+    engine: Engine,
+    sqlfile: pathlib.Path,
+    bind_params: typing.Mapping[str, typing.Any] | None = None,
+) -> None:
     """Execute a SQL file."""
-    execute_query(engine, sqlfile.read_text())
+    statements = sqlfile.read_text()
+    if bind_params is not None:
+        binding_names = sorted(bind_params.keys(), key=len, reverse=True)
+        for binding_name in binding_names:
+            param = bind_params[binding_name]
+            substitute = param if param is not None else "NULL"
+            statements = statements.replace(f":{binding_name}", f"{substitute}")
+    execute_query(engine, statements)
 
 
 def import_csv_file_with_header(

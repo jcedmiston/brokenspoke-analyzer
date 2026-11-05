@@ -5,9 +5,13 @@ Define functions to run the various SQL scripts performing the operations to
 compute the BNA scores.
 """
 
-import dataclasses
 import pathlib
 import typing
+from dataclasses import (
+    asdict,
+    dataclass,
+)
+from functools import partial
 
 from loguru import logger
 from sqlalchemy.engine import Engine
@@ -24,24 +28,6 @@ NB_PBL_MAX_GAP_M = 400
 NB_PBL_MAX_GAP_DIST_M = 40
 
 
-def execute_sqlfile_with_substitutions(
-    engine: Engine,
-    sqlfile: pathlib.Path,
-    bind_params: typing.Mapping[str, typing.Any] | None = None,
-) -> None:
-    """Execute SQL statements with substitutions."""
-    logger.debug(f"Execute {sqlfile}")
-    logger.debug(f"{bind_params=}")
-    statements = sqlfile.read_text()
-    if bind_params:
-        binding_names = sorted(bind_params.keys(), key=len, reverse=True)
-        for binding_name in binding_names:
-            param = bind_params[binding_name]
-            substitute = param if param is not None else "NULL"
-            statements = statements.replace(f":{binding_name}", f"{substitute}")
-    dbcore.execute_query(engine, statements)
-
-
 def features(
     engine: Engine,
     sql_script_dir: pathlib.Path,
@@ -49,20 +35,20 @@ def features(
     boundary_buffer: int,
 ) -> None:
     """Compute the BNA features."""
-    sql_script_dir = sql_script_dir.resolve(strict=True)
     sql_feature_script_dir = sql_script_dir / "features"
+
+    # Create partial function with the engine pre-bound.
+    execute_sql: typing.Callable = partial(dbcore.execute_sql_file, engine)
 
     # Update field names.
     logger.info("Update field names")
-    sql_script = sql_script_dir / "prepare_tables.sql"
     bind_params = {"nb_output_srid": output_srid}
-    execute_sqlfile_with_substitutions(engine, sql_script, bind_params)
+    execute_sql(sql_script_dir / "prepare_tables.sql", bind_params)
 
     # Clip.
     logger.info("Clip OSM source data to boundary + buffer")
-    sql_script = sql_script_dir / "clip_osm.sql"
     bind_params = {"nb_boundary_buffer": boundary_buffer}
-    execute_sqlfile_with_substitutions(engine, sql_script, bind_params)
+    execute_sql(sql_script_dir / "clip_osm.sql", bind_params)
 
     # Remove paths that prohibit bicycles.
     logger.info("Removing paths that prohibit bicycles")
@@ -73,34 +59,32 @@ def features(
 
     # Setting values on road segments.
     logger.info("Setting values on road segments")
-    sql_scripts = ["one_way.sql", "width_ft.sql", "functional_class.sql"]
-    for script in sql_scripts:
-        sql_script = sql_feature_script_dir / script
-        dbcore.execute_sql_file(engine, sql_script)
-    sql_script = sql_feature_script_dir / "paths.sql"
-    bind_params = {"nb_output_srid": output_srid}
-    execute_sqlfile_with_substitutions(engine, sql_script, bind_params)
-    sql_scripts = ["speed_limit.sql", "lanes.sql", "park.sql"]
-    for script in sql_scripts:
-        sql_script = sql_feature_script_dir / script
-        dbcore.execute_sql_file(engine, sql_script)
-    sql_script = sql_feature_script_dir / "bike_infra.sql"
-    bind_params = {
-        "pbl_buffer_m": NB_PBL_BUFFER_M,
-        "pbl_max_angle_deg": NB_PBL_MAX_ANGLE_DEG,
-        "pbl_max_gap_m": NB_PBL_MAX_GAP_M,
-        "pbl_max_gap_dist_m": NB_PBL_MAX_GAP_DIST_M,
-    }
-    execute_sqlfile_with_substitutions(engine, sql_script, bind_params)
-    sql_scripts = ["class_adjustments.sql", "legs.sql"]
-    for script in sql_scripts:
-        sql_script = sql_feature_script_dir / script
-        dbcore.execute_sql_file(engine, sql_script)
-    sql_scripts = ["signalized.sql", "stops.sql", "rrfb.sql", "island.sql"]
-    bind_params = {"sigctl_search_dist": NB_SIGCTL_SEARCH_DIST}
-    for script in sql_scripts:
-        sql_script = sql_feature_script_dir / script
-        execute_sqlfile_with_substitutions(engine, sql_script, bind_params)
+    sql_scripts: list[tuple[str, dict[str, typing.Any] | None]] = [
+        ("one_way.sql", None),
+        ("width_ft.sql", None),
+        ("functional_class.sql", None),
+        ("paths.sql", {"nb_output_srid": output_srid}),
+        ("speed_limit.sql", None),
+        ("lanes.sql", None),
+        ("park.sql", None),
+        (
+            "bike_infra.sql",
+            {
+                "pbl_buffer_m": NB_PBL_BUFFER_M,
+                "pbl_max_angle_deg": NB_PBL_MAX_ANGLE_DEG,
+                "pbl_max_gap_m": NB_PBL_MAX_GAP_M,
+                "pbl_max_gap_dist_m": NB_PBL_MAX_GAP_DIST_M,
+            },
+        ),
+        ("class_adjustments.sql", None),
+        ("legs.sql", None),
+        ("signalized.sql", {"sigctl_search_dist": NB_SIGCTL_SEARCH_DIST}),
+        ("stops.sql", {"sigctl_search_dist": NB_SIGCTL_SEARCH_DIST}),
+        ("rrfb.sql", {"sigctl_search_dist": NB_SIGCTL_SEARCH_DIST}),
+        ("island.sql", {"sigctl_search_dist": NB_SIGCTL_SEARCH_DIST}),
+    ]
+    for script, bind_params in sql_scripts:
+        execute_sql(sql_feature_script_dir / script, bind_params)
 
 
 def stress(
@@ -110,142 +94,104 @@ def stress(
     city_default_speed: int | None,
 ) -> None:
     """Compute stress levels."""
-    sql_script_dir = sql_script_dir.resolve(strict=True)
     sql_stress_script_dir = sql_script_dir / "stress"
 
     # Calculating stress.
     logger.info("Calculating stress")
-    sql_script = sql_stress_script_dir / "stress_motorway-trunk.sql"
-    dbcore.execute_sql_file(engine, sql_script)
 
-    # Primary.
-    logger.info("Primary")
-    sql_script = sql_stress_script_dir / "stress_segments_higher_order.sql"
-    bind_params = {
-        "class": "primary",
-        "default_speed": 40,
-        "default_lanes": 2,
-        "default_parking": 1,
-        "default_parking_width": 8,
-        "default_facility_width": 5,
+    # {Log Description: (script_name, bind_params | None)}
+    sql_scripts: dict[str, tuple[str, dict[str, typing.Any] | None]] = {
+        "Motorway/Trunk routes": ("stress_motorway-trunk.sql", None),
+        "Primary routes": (
+            "stress_segments_higher_order.sql",
+            {
+                "class": "primary",
+                "default_speed": 40,
+                "default_lanes": 2,
+                "default_parking": 1,
+                "default_parking_width": 8,
+                "default_facility_width": 5,
+            },
+        ),
+        "Secondary routes": (
+            "stress_segments_higher_order.sql",
+            {
+                "class": "secondary",
+                "default_speed": 40,
+                "default_lanes": 2,
+                "default_parking": 1,
+                "default_parking_width": 8,
+                "default_facility_width": 5,
+            },
+        ),
+        "Tertiary routes": (
+            "stress_segments_higher_order.sql",
+            {
+                "class": "tertiary",
+                "default_speed": 30,
+                "default_lanes": 1,
+                "default_parking": 1,
+                "default_parking_width": 8,
+                "default_facility_width": 5,
+            },
+        ),
+        "Residential routes": (
+            "stress_segments_lower_order_res.sql",
+            {
+                "class": "residential",
+                "default_lanes": 1,
+                "default_parking": 1,
+                "default_roadway_width": 27,
+                "state_default": state_default_speed,
+                "city_default": city_default_speed,
+            },
+        ),
+        "Unclassified routes": (
+            "stress_segments_lower_order.sql",
+            {
+                "class": "unclassified",
+                "default_speed": 25,
+                "default_lanes": 1,
+                "default_parking": 1,
+                "default_roadway_width": 27,
+            },
+        ),
+        "Living Streets": ("stress_living_street.sql", None),
+        "Cycle Tracks": ("stress_track.sql", None),
+        "Cycle Paths": ("stress_path.sql", None),
+        "Correcting One-ways": ("stress_one_way_reset.sql", None),
+        "Motorway/Trunk intersections": ("stress_motorway-trunk_ints.sql", None),
+        "Primary intersections": ("stress_primary_ints.sql", None),
+        "Secondary intersections": ("stress_secondary_ints.sql", None),
+        "Tertiary intersections": (
+            "stress_tertiary_ints.sql",
+            {
+                "primary_speed": 40,
+                "secondary_speed": 40,
+                "primary_lanes": 2,
+                "secondary_lanes": 2,
+            },
+        ),
+        "Residential/unclassified intersections": (
+            "stress_lesser_ints.sql",
+            {
+                "primary_speed": 40,
+                "secondary_speed": 40,
+                "tertiary_speed": 30,
+                "primary_lanes": 2,
+                "secondary_lanes": 2,
+                "tertiary_lanes": 1,
+            },
+        ),
+        "Other intersections": ("stress_link_ints.sql", None),
     }
-    execute_sqlfile_with_substitutions(engine, sql_script, bind_params)
 
-    # Secondary.
-    logger.info("Secondary")
-    sql_script = sql_stress_script_dir / "stress_segments_higher_order.sql"
-    bind_params = {
-        "class": "secondary",
-        "default_speed": 40,
-        "default_lanes": 2,
-        "default_parking": 1,
-        "default_parking_width": 8,
-        "default_facility_width": 5,
-    }
-    execute_sqlfile_with_substitutions(engine, sql_script, bind_params)
-
-    # Tertiary.
-    logger.info("Tertiary")
-    sql_script = sql_stress_script_dir / "stress_segments_higher_order.sql"
-    bind_params = {
-        "class": "tertiary",
-        "default_speed": 30,
-        "default_lanes": 1,
-        "default_parking": 1,
-        "default_parking_width": 8,
-        "default_facility_width": 5,
-    }
-    execute_sqlfile_with_substitutions(engine, sql_script, bind_params)
-
-    # Residential.
-    logger.info("Residential")
-    sql_script = sql_stress_script_dir / "stress_segments_lower_order_res.sql"
-    bind_params = {
-        "class": "residential",
-        "default_lanes": 1,
-        "default_parking": 1,
-        "default_roadway_width": 27,
-        "state_default": state_default_speed,
-        "city_default": city_default_speed,
-    }
-    execute_sqlfile_with_substitutions(engine, sql_script, bind_params)
-
-    # Unclassified.
-    logger.info("Unclassified")
-    sql_script = sql_stress_script_dir / "stress_segments_lower_order.sql"
-    bind_params = {
-        "class": "unclassified",
-        "default_speed": 25,
-        "default_lanes": 1,
-        "default_parking": 1,
-        "default_roadway_width": 27,
-    }
-    execute_sqlfile_with_substitutions(engine, sql_script, bind_params)
-    sql_scripts = [
-        "stress_living_street.sql",
-        "stress_track.sql",
-        "stress_path.sql",
-        "stress_one_way_reset.sql",
-        "stress_motorway-trunk_ints.sql",
-        "stress_primary_ints.sql",
-        "stress_secondary_ints.sql",
-    ]
-    for script in sql_scripts:
-        sql_script = sql_stress_script_dir / script
-        dbcore.execute_sql_file(engine, sql_script)
-
-    # Tertiary intersections.
-    logger.info("Tertiary intersections")
-    sql_script = sql_stress_script_dir / "stress_tertiary_ints.sql"
-    bind_params = {
-        "primary_speed": 40,
-        "secondary_speed": 40,
-        "primary_lanes": 2,
-        "secondary_lanes": 2,
-    }
-    execute_sqlfile_with_substitutions(engine, sql_script, bind_params)
-    sql_script = sql_stress_script_dir / "stress_lesser_ints.sql"
-    bind_params = {
-        "primary_speed": 40,
-        "secondary_speed": 40,
-        "tertiary_speed": 30,
-        "primary_lanes": 2,
-        "secondary_lanes": 2,
-        "tertiary_lanes": 1,
-    }
-    execute_sqlfile_with_substitutions(engine, sql_script, bind_params)
-    sql_script = sql_stress_script_dir / "stress_link_ints.sql"
-    dbcore.execute_sql_file(engine, sql_script)
+    for log_description, (sql_script, bind_params) in sql_scripts.items():
+        logger.info(log_description)
+        dbcore.execute_sql_file(engine, sql_stress_script_dir / sql_script, bind_params)
 
 
-@dataclasses.dataclass
-class Tolerance:
-    """Cluster tolerances given in units of `output_srid`."""
-
-    colleges: int = 100
-    community_centers: int = 50
-    doctors: int = 50
-    dentists: int = 50
-    hospitals: int = 50
-    pharmacies: int = 50
-    parks: int = 50
-    retail: int = 50
-    transit: int = 75
-    universities: int = 150
-
-
-@dataclasses.dataclass
-class PathConstraint:
-    """Define the Path Constraints."""
-
-    # Minimum path length to be considered for recreation access.
-    min_length: int = 4800
-    # Minimum corner-to-corner span of path bounding box to be considered for
-    # recreation access.
-    min_bbox: int = 3300
-
-
-@dataclasses.dataclass
+@dataclass(frozen=True)
 class BlockRoad:
     """Define the Block Road items."""
 
@@ -255,7 +201,7 @@ class BlockRoad:
     min_length: int = 30
 
 
-@dataclasses.dataclass
+@dataclass(frozen=True)
 class Score:
     """Define the Score parts."""
 
@@ -268,18 +214,50 @@ class Score:
     transit: int = 15
 
 
-@dataclasses.dataclass
+@dataclass(frozen=True)
+class StepwiseScoring:
+    """Define the Stepwise Scoring parts for population and jobs access."""
+
+    max_score: int = 1
+    step1: float = 0.03
+    score1: float = 0.1
+    step2: float = 0.2
+    score2: float = 0.4
+    step3: float = 0.5
+    score3: float = 0.8
+
+
+@dataclass(frozen=True)
 class Access:
     """Define the Access parts."""
 
-    name: str
     first: float = 0.0
     second: float = 0.0
     third: float = 0.0
     max_score: int = 1
 
 
-def connectivity(  # noqa: PLR0915
+@dataclass(frozen=True)
+class TrailAccess(Access):
+    """Inherited class to define the Path Constraints."""
+
+    # Minimum path length to be considered for recreation access.
+    min_path_length: int = 4800
+    # Minimum corner-to-corner span of path bounding box to be considered for
+    # recreation access.
+    min_bbox_length: int = 3300
+
+
+@dataclass(frozen=True, kw_only=True)
+class Destination:
+    """Define the Destination parts."""
+
+    name: str
+    tolerance: int | None = None
+    access: Access = Access()
+
+
+def connectivity(
     engine: Engine,
     sql_script_dir: pathlib.Path,
     output_srid: int,
@@ -293,32 +271,32 @@ def connectivity(  # noqa: PLR0915
         raise ValueError("`max_trip_distance` must be set")
 
     # Prepare computation variables.
-    tolerance = Tolerance()
-    path_constraint = PathConstraint()
     block_road = BlockRoad()
     score = Score()
+    stepwise_scoring = StepwiseScoring()
 
     # Prepare the paths.
-    sql_script_dir = sql_script_dir.resolve(strict=True)
     sql_connectivity_script_dir = sql_script_dir / "connectivity"
+    sql_destination_script_dir = sql_connectivity_script_dir / "destinations"
+
+    # Create partial function with the engine pre-bound.
+    execute_sql: typing.Callable = partial(dbcore.execute_sql_file, engine)
 
     # Building network.
     logger.info("BUILDING: Building network")
-    sql_script = sql_connectivity_script_dir / "build_network.sql"
     bind_params = {"nb_output_srid": output_srid}
-    execute_sqlfile_with_substitutions(engine, sql_script, bind_params)
+    execute_sql(sql_connectivity_script_dir / "build_network.sql", bind_params)
 
-    sql_script = sql_connectivity_script_dir / "census_blocks.sql"
     bind_params = {
         "block_road_buffer": block_road.buffer,
         "block_road_min_length": block_road.min_length,
         "nb_output_srid": output_srid,
     }
-    execute_sqlfile_with_substitutions(engine, sql_script, bind_params)
+    execute_sql(sql_connectivity_script_dir / "census_blocks.sql", bind_params)
 
     # Build the temporary block verts for reachable roads calc
     logger.info("CONNECTIVITY: Block verts")
-    dbcore.execute_sql_file(engine, sql_connectivity_script_dir / "block_verts.sql")
+    execute_sql(sql_connectivity_script_dir / "block_verts.sql")
 
     # Reachable roads stress.
     for stress_level in ["high", "low"]:
@@ -326,33 +304,31 @@ def connectivity(  # noqa: PLR0915
 
         # Prep.
         logger.info(f"Reachable roads {stress_level} stress: prep")
-        sql_script = (
+        execute_sql(
             sql_connectivity_script_dir
-            / f"reachable_roads_{stress_level}_stress_prep.sql"
+            / f"reachable_roads_{stress_level}_stress_prep.sql",
         )
-        dbcore.execute_sql_file(engine, sql_script)
 
         # Calculations
         logger.info(f"Reachable roads {stress_level} stress: calculations")
-        sql_script = (
-            sql_connectivity_script_dir
-            / f"reachable_roads_{stress_level}_stress_calc.sql"
-        )
         for i in range(8):
             bind_params = {
                 "thread_num": 8,
                 "thread_no": i,
                 "nb_max_trip_distance": max_trip_distance,
             }
-            execute_sqlfile_with_substitutions(engine, sql_script, bind_params)
+            execute_sql(
+                sql_connectivity_script_dir
+                / f"reachable_roads_{stress_level}_stress_calc.sql",
+                bind_params,
+            )
 
         # Cleanup.
         logger.info(f"Reachable roads {stress_level} stress: cleanup")
-        sql_script = (
+        execute_sql(
             sql_connectivity_script_dir
-            / f"reachable_roads_{stress_level}_stress_cleanup.sql"
+            / f"reachable_roads_{stress_level}_stress_cleanup.sql",
         )
-        dbcore.execute_sql_file(engine, sql_script)
 
     # Drop the temporary block verts
     dbcore.execute_query(
@@ -361,145 +337,109 @@ def connectivity(  # noqa: PLR0915
 
     # Connected census blocks.
     logger.info("CONNECTIVITY: Connected census blocks")
-    sql_script = sql_connectivity_script_dir / "connected_census_blocks.sql"
     bind_params = {
         "nb_max_trip_distance": max_trip_distance,
         "nb_output_srid": output_srid,
     }
-    execute_sqlfile_with_substitutions(engine, sql_script, bind_params)
+    execute_sql(
+        sql_connectivity_script_dir / "connected_census_blocks.sql", bind_params
+    )
 
     # Access population
     logger.info("METRICS: Access: population")
-    sql_script = sql_connectivity_script_dir / "access_population.sql"
-    bind_params: typing.Mapping[str, float] = {
-        "max_score": 1,
-        "step1": 0.03,
-        "score1": 0.1,
-        "step2": 0.2,
-        "score2": 0.4,
-        "step3": 0.5,
-        "score3": 0.8,
-    }
-    execute_sqlfile_with_substitutions(engine, sql_script, bind_params)
+    execute_sql(
+        sql_connectivity_script_dir / "access_population.sql",
+        bind_params=asdict(stepwise_scoring),
+    )
 
     # Import jobs.
     if import_jobs:
         logger.info("METRICS: Access: jobs")
-        sql_script = sql_connectivity_script_dir / "census_block_jobs.sql"
-        dbcore.execute_sql_file(engine, sql_script)
-
-        sql_script = sql_connectivity_script_dir / "access_jobs.sql"
-        bind_params: typing.Mapping[str, float] = {
-            "max_score": 1,
-            "step1": 0.03,
-            "score1": 0.1,
-            "step2": 0.2,
-            "score2": 0.4,
-            "step3": 0.5,
-            "score3": 0.8,
-        }
-        execute_sqlfile_with_substitutions(engine, sql_script, bind_params)
+        execute_sql(sql_connectivity_script_dir / "census_block_jobs.sql")
+        execute_sql(
+            sql_connectivity_script_dir / "access_jobs.sql",
+            bind_params=asdict(stepwise_scoring),
+        )
 
     # Destinations.
     logger.info("METRICS: Destinations")
-    destinations = [
-        (tolerance.colleges, "colleges"),
-        (tolerance.community_centers, "community_centers"),
-        (tolerance.doctors, "doctors"),
-        (tolerance.dentists, "dentists"),
-        (tolerance.hospitals, "hospitals"),
-        (tolerance.pharmacies, "pharmacies"),
-        (tolerance.parks, "parks"),
-        (tolerance.retail, "retail"),
-        (tolerance.transit, "transit"),
-        (tolerance.universities, "universities"),
+    destinations: list[Destination] = [
+        Destination(name="colleges", tolerance=100, access=Access(0.7)),
+        Destination(
+            name="community_centers",
+            tolerance=50,
+            access=Access(0.4, 0.2, 0.1),
+        ),
+        Destination(
+            name="doctors",
+            tolerance=50,
+            access=Access(0.4, 0.2, 0.1),
+        ),
+        Destination(
+            name="dentists",
+            tolerance=50,
+            access=Access(0.4, 0.2, 0.1),
+        ),
+        Destination(name="hospitals", tolerance=50, access=Access(0.7)),
+        Destination(
+            name="pharmacies",
+            tolerance=50,
+            access=Access(0.4, 0.2, 0.1),
+        ),
+        Destination(name="parks", tolerance=50, access=Access(0.3, 0.2, 0.2)),
+        Destination(
+            name="retail",
+            tolerance=50,
+            access=Access(0.4, 0.2, 0.1),
+        ),
+        Destination(name="transit", tolerance=75, access=Access(0.6)),
+        Destination(name="universities", tolerance=150, access=Access(0.7)),
+        Destination(name="schools", access=Access(0.3, 0.2, 0.2)),
+        Destination(name="social_services", access=Access(0.7)),
+        Destination(name="supermarkets", access=Access(0.6, 0.2)),
     ]
-    sql_destination_script_dir = sql_connectivity_script_dir / "destinations"
+
     for destination in destinations:
-        sql_script = sql_destination_script_dir / f"{destination[1]}.sql"
         bind_params = {
-            "cluster_tolerance": destination[0],
             "nb_output_srid": output_srid,
         }
-        execute_sqlfile_with_substitutions(engine, sql_script, bind_params)
-    destinations = ["schools", "social_services", "supermarkets"]
-    for destination in destinations:
-        sql_script = sql_destination_script_dir / f"{destination}.sql"
-        bind_params = {"nb_output_srid": output_srid}
-        execute_sqlfile_with_substitutions(engine, sql_script, bind_params)
+        if destination.tolerance is not None:
+            bind_params["cluster_tolerance"] = destination.tolerance
+        execute_sql(sql_destination_script_dir / f"{destination.name}.sql", bind_params)
+
+    # Add trails for access calculations.
+    destinations.append(
+        Destination(
+            name="trails",
+            access=TrailAccess(0.7, 0.2),
+        )
+    )
 
     # Accesses.
     logger.info("METRICS: Accesses")
-    accesses = [
-        Access("colleges", first=0.7),
-        Access("community_centers", first=0.4, second=0.2, third=0.1),
-        Access("doctors", first=0.4, second=0.2, third=0.1),
-        Access("dentists", first=0.4, second=0.2, third=0.1),
-        Access("hospitals", first=0.7),
-        Access("pharmacies", first=0.4, second=0.2, third=0.1),
-        Access("parks", first=0.3, second=0.2, third=0.2),
-        Access("retail", first=0.4, second=0.2, third=0.1),
-        Access("schools", first=0.3, second=0.2, third=0.2),
-        Access("social_services", first=0.7),
-        Access("supermarkets", first=0.6, second=0.2),
-        Access("transit", first=0.6),
-        Access("universities", first=0.7),
-    ]
-    for access in accesses:
-        sql_script = sql_connectivity_script_dir / f"access_{access.name}.sql"
-        bind_params = {
-            "first": access.first,
-            "second": access.second,
-            "third": access.third,
-            "max_score": access.max_score,
-        }
-        execute_sqlfile_with_substitutions(engine, sql_script, bind_params)
-
-    # Access_trails.
-    sql_script = sql_connectivity_script_dir / "access_trails.sql"
-    bind_params = {
-        "first": 0.7,
-        "second": 0.2,
-        "third": 0,
-        "max_score": 1,
-        "min_path_length": path_constraint.min_length,
-        "min_bbox_length": path_constraint.min_bbox,
-    }
-    execute_sqlfile_with_substitutions(engine, sql_script, bind_params)
+    for destination in destinations:
+        execute_sql(
+            sql_connectivity_script_dir / f"access_{destination.name}.sql",
+            bind_params=asdict(destination.access),
+        )
 
     # Access_overall.
-    sql_script = sql_connectivity_script_dir / "access_overall.sql"
-    bind_params = {
-        "total": score.total,
-        "people": score.people,
-        "opportunity": score.opportunity,
-        "core_services": score.core_services,
-        "retail": score.retail,
-        "recreation": score.recreation,
-        "transit": score.transit,
-    }
-    execute_sqlfile_with_substitutions(engine, sql_script, bind_params)
+    execute_sql(
+        sql_connectivity_script_dir / "access_overall.sql",
+        bind_params=asdict(score),
+    )
 
     # Prepare score inputs.
-    sql_script = sql_connectivity_script_dir / "score_inputs.sql"
-    dbcore.execute_sql_file(engine, sql_script)
+    execute_sql(sql_connectivity_script_dir / "score_inputs.sql")
 
     # Overall score.
-    sql_script = sql_connectivity_script_dir / "overall_scores.sql"
-    bind_params = {
-        "total": score.total,
-        "people": score.people,
-        "opportunity": score.opportunity,
-        "core_services": score.core_services,
-        "retail": score.retail,
-        "recreation": score.recreation,
-        "transit": score.transit,
-    }
-    execute_sqlfile_with_substitutions(engine, sql_script, bind_params)
+    execute_sql(
+        sql_connectivity_script_dir / "overall_scores.sql",
+        bind_params=asdict(score),
+    )
 
     # Block-level category scores.
-    sql_script = sql_connectivity_script_dir / "category_scores.sql"
-    dbcore.execute_sql_file(engine, sql_script)
+    execute_sql(sql_connectivity_script_dir / "category_scores.sql")
 
 
 def measure(
@@ -514,7 +454,7 @@ def measure(
     # Calculating mileage.
     logger.info("MILEAGE: Calculating mileage")
     sql_script = sql_connectivity_script_dir / "calculate_mileage.sql"
-    execute_sqlfile_with_substitutions(engine, sql_script)
+    dbcore.execute_sql_file(engine, sql_script)
 
 
 def all_(
