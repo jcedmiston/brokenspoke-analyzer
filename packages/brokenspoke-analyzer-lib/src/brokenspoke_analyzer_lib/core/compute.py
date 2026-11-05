@@ -239,7 +239,7 @@ class Access:
 
 @dataclass(frozen=True)
 class TrailAccess(Access):
-    """Inherited class to define the Path Constraints."""
+    """Inherited class to add the Path Constraints."""
 
     # Minimum path length to be considered for recreation access.
     min_path_length: int = 4800
@@ -254,7 +254,7 @@ class Destination:
 
     name: str
     tolerance: int | None = None
-    access: Access = Access()
+    access: Access
 
 
 def connectivity(
@@ -400,20 +400,13 @@ def connectivity(
     ]
 
     for destination in destinations:
-        bind_params = {
-            "nb_output_srid": output_srid,
-        }
+        bind_params = {"nb_output_srid": output_srid}
         if destination.tolerance is not None:
             bind_params["cluster_tolerance"] = destination.tolerance
         execute_sql(sql_destination_script_dir / f"{destination.name}.sql", bind_params)
 
     # Add trails for access calculations.
-    destinations.append(
-        Destination(
-            name="trails",
-            access=TrailAccess(0.7, 0.2),
-        )
-    )
+    destinations.append(Destination(name="trails", access=TrailAccess(0.7, 0.2)))
 
     # Accesses.
     logger.info("METRICS: Accesses")
