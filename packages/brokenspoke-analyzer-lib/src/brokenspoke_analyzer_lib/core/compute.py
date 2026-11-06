@@ -28,6 +28,16 @@ NB_PBL_MAX_GAP_M = 400
 NB_PBL_MAX_GAP_DIST_M = 40
 
 
+def execute_sql_file_shim(
+    engine: Engine,
+    sql_directory: pathlib.Path,
+    sql_file: str,
+    bind_params: typing.Mapping[str, typing.Any] | None = None,
+) -> None:
+    """Shim to allow partial func creation of the execute_sql_file function."""
+    dbcore.execute_sql_file(engine, sql_directory / sql_file, bind_params)
+
+
 def features(
     engine: Engine,
     sql_script_dir: pathlib.Path,
@@ -35,20 +45,21 @@ def features(
     boundary_buffer: int,
 ) -> None:
     """Compute the BNA features."""
-    sql_feature_script_dir = sql_script_dir / "features"
-
-    # Create partial function with the engine pre-bound.
-    execute_sql: typing.Callable = partial(dbcore.execute_sql_file, engine)
+    # Create partial function with the engine and directory pre-bound
+    # to make calls to execute_sql_file less repetitive and more readable.
+    execute_sql: typing.Callable[[str, dict | None], None] = partial(
+        execute_sql_file_shim, engine, sql_script_dir
+    )
 
     # Update field names.
     logger.info("Update field names")
     bind_params = {"nb_output_srid": output_srid}
-    execute_sql(sql_script_dir / "prepare_tables.sql", bind_params)
+    execute_sql("prepare_tables.sql", bind_params)
 
     # Clip.
     logger.info("Clip OSM source data to boundary + buffer")
     bind_params = {"nb_boundary_buffer": boundary_buffer}
-    execute_sql(sql_script_dir / "clip_osm.sql", bind_params)
+    execute_sql("clip_osm.sql", bind_params)
 
     # Remove paths that prohibit bicycles.
     logger.info("Removing paths that prohibit bicycles")
@@ -84,7 +95,9 @@ def features(
         ("island.sql", {"sigctl_search_dist": NB_SIGCTL_SEARCH_DIST}),
     ]
     for script, bind_params in sql_scripts:
-        execute_sql(sql_feature_script_dir / script, bind_params)
+        dbcore.execute_sql_file(
+            engine, sql_script_dir / "features" / script, bind_params
+        )
 
 
 def stress(
@@ -94,8 +107,6 @@ def stress(
     city_default_speed: int | None,
 ) -> None:
     """Compute stress levels."""
-    sql_stress_script_dir = sql_script_dir / "stress"
-
     # Calculating stress.
     logger.info("Calculating stress")
 
@@ -188,7 +199,9 @@ def stress(
 
     for log_description, (sql_script, bind_params) in sql_scripts.items():
         logger.info(log_description)
-        dbcore.execute_sql_file(engine, sql_stress_script_dir / sql_script, bind_params)
+        dbcore.execute_sql_file(
+            engine, sql_script_dir / "stress" / sql_script, bind_params
+        )
 
 
 @dataclass(frozen=True)
@@ -261,42 +274,37 @@ def connectivity(
     engine: Engine,
     sql_script_dir: pathlib.Path,
     output_srid: int,
-    max_trip_distance: int | None = constant.DEFAULT_MAX_TRIP_DISTANCE,
+    max_trip_distance: int = constant.DEFAULT_MAX_TRIP_DISTANCE,
     *,
     import_jobs: bool,
 ) -> None:
     """Compute BNA connectivity scores."""
-    # Makes MyPy happy.
-    if not max_trip_distance:
-        raise ValueError("`max_trip_distance` must be set")
-
     # Prepare computation variables.
     block_road = BlockRoad()
     score = Score()
     stepwise_scoring = StepwiseScoring()
 
-    # Prepare the paths.
-    sql_connectivity_script_dir = sql_script_dir / "connectivity"
-    sql_destination_script_dir = sql_connectivity_script_dir / "destinations"
-
-    # Create partial function with the engine pre-bound.
-    execute_sql: typing.Callable = partial(dbcore.execute_sql_file, engine)
+    # Create partial function with the engine and directory pre-bound
+    # to make calls to execute_sql_file less repetitive and more readable.
+    execute_sql: typing.Callable[[str, dict | None], None] = partial(
+        execute_sql_file_shim, engine, sql_script_dir / "connectivity"
+    )
 
     # Building network.
     logger.info("BUILDING: Building network")
     bind_params = {"nb_output_srid": output_srid}
-    execute_sql(sql_connectivity_script_dir / "build_network.sql", bind_params)
+    execute_sql("build_network.sql", bind_params)
 
     bind_params = {
         "block_road_buffer": block_road.buffer,
         "block_road_min_length": block_road.min_length,
         "nb_output_srid": output_srid,
     }
-    execute_sql(sql_connectivity_script_dir / "census_blocks.sql", bind_params)
+    execute_sql("census_blocks.sql", bind_params)
 
     # Build the temporary block verts for reachable roads calc
     logger.info("CONNECTIVITY: Block verts")
-    execute_sql(sql_connectivity_script_dir / "block_verts.sql")
+    execute_sql("block_verts.sql")
 
     # Reachable roads stress.
     for stress_level in ["high", "low"]:
@@ -304,10 +312,7 @@ def connectivity(
 
         # Prep.
         logger.info(f"Reachable roads {stress_level} stress: prep")
-        execute_sql(
-            sql_connectivity_script_dir
-            / f"reachable_roads_{stress_level}_stress_prep.sql",
-        )
+        execute_sql(f"reachable_roads_{stress_level}_stress_prep.sql")
 
         # Calculations
         logger.info(f"Reachable roads {stress_level} stress: calculations")
@@ -318,16 +323,14 @@ def connectivity(
                 "nb_max_trip_distance": max_trip_distance,
             }
             execute_sql(
-                sql_connectivity_script_dir
-                / f"reachable_roads_{stress_level}_stress_calc.sql",
+                f"reachable_roads_{stress_level}_stress_calc.sql",
                 bind_params,
             )
 
         # Cleanup.
         logger.info(f"Reachable roads {stress_level} stress: cleanup")
         execute_sql(
-            sql_connectivity_script_dir
-            / f"reachable_roads_{stress_level}_stress_cleanup.sql",
+            f"reachable_roads_{stress_level}_stress_cleanup.sql",
         )
 
     # Drop the temporary block verts
@@ -341,25 +344,17 @@ def connectivity(
         "nb_max_trip_distance": max_trip_distance,
         "nb_output_srid": output_srid,
     }
-    execute_sql(
-        sql_connectivity_script_dir / "connected_census_blocks.sql", bind_params
-    )
+    execute_sql("connected_census_blocks.sql", bind_params)
 
     # Access population
     logger.info("METRICS: Access: population")
-    execute_sql(
-        sql_connectivity_script_dir / "access_population.sql",
-        bind_params=asdict(stepwise_scoring),
-    )
+    execute_sql("access_population.sql", bind_params=asdict(stepwise_scoring))
 
     # Import jobs.
     if import_jobs:
         logger.info("METRICS: Access: jobs")
-        execute_sql(sql_connectivity_script_dir / "census_block_jobs.sql")
-        execute_sql(
-            sql_connectivity_script_dir / "access_jobs.sql",
-            bind_params=asdict(stepwise_scoring),
-        )
+        execute_sql("census_block_jobs.sql")
+        execute_sql("access_jobs.sql", bind_params=asdict(stepwise_scoring))
 
     # Destinations.
     logger.info("METRICS: Destinations")
@@ -399,11 +394,16 @@ def connectivity(
         Destination(name="supermarkets", access=Access(0.6, 0.2)),
     ]
 
+    sql_destination_script_dir = sql_script_dir / "connectivity" / "destinations"
     for destination in destinations:
         bind_params = {"nb_output_srid": output_srid}
         if destination.tolerance is not None:
             bind_params["cluster_tolerance"] = destination.tolerance
-        execute_sql(sql_destination_script_dir / f"{destination.name}.sql", bind_params)
+        dbcore.execute_sql_file(
+            engine,
+            sql_destination_script_dir / f"{destination.name}.sql",
+            bind_params,
+        )
 
     # Add trails for access calculations.
     destinations.append(Destination(name="trails", access=TrailAccess(0.7, 0.2)))
@@ -412,27 +412,20 @@ def connectivity(
     logger.info("METRICS: Accesses")
     for destination in destinations:
         execute_sql(
-            sql_connectivity_script_dir / f"access_{destination.name}.sql",
-            bind_params=asdict(destination.access),
+            f"access_{destination.name}.sql", bind_params=asdict(destination.access)
         )
 
     # Access_overall.
-    execute_sql(
-        sql_connectivity_script_dir / "access_overall.sql",
-        bind_params=asdict(score),
-    )
+    execute_sql("access_overall.sql", bind_params=asdict(score))
 
     # Prepare score inputs.
-    execute_sql(sql_connectivity_script_dir / "score_inputs.sql")
+    execute_sql("score_inputs.sql")
 
     # Overall score.
-    execute_sql(
-        sql_connectivity_script_dir / "overall_scores.sql",
-        bind_params=asdict(score),
-    )
+    execute_sql("overall_scores.sql", bind_params=asdict(score))
 
     # Block-level category scores.
-    execute_sql(sql_connectivity_script_dir / "category_scores.sql")
+    execute_sql("category_scores.sql")
 
 
 def measure(
