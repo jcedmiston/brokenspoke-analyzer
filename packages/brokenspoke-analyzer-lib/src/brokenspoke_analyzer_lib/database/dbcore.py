@@ -50,20 +50,6 @@ def import_csv_file_with_header(
     runner.run_psql_command_string(database_url, psql_cmd)
 
 
-def load_csv_file(
-    engine: Engine,
-    sqlfile: pathlib.Path,
-    csvfile: pathlib.Path,
-    table: str,
-) -> None:
-    """Create a table and load the data from the CSV file."""
-    # Run the script to create the table.
-    execute_sql_file(engine, sqlfile)
-
-    # Load the data from the CSV file.
-    import_csv_file_with_header(engine, csvfile, table)
-
-
 def export_to_csv(engine: Engine, csvfile: pathlib.Path, table: str) -> None:
     """Dump the table content into a CSV file."""
     csvfile_str = sanitize_sql_filename(str(csvfile.resolve()))

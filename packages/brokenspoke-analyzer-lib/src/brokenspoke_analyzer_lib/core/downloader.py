@@ -7,7 +7,6 @@ import yarl
 from bs4 import BeautifulSoup
 from loguru import logger
 
-PFB_PUBLIC_DOCUMENTS_URL = "https://s3.amazonaws.com/pfb-public-documents"
 TIGER_URL = "https://www2.census.gov/geo/tiger"
 CHUNK_SIZE = 65536
 LODES_URL = "https://lehd.ces.census.gov/data/lodes/LODES8"

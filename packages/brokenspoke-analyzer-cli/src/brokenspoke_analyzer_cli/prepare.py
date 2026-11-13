@@ -23,9 +23,6 @@ from brokenspoke_analyzer_lib.core import (
 
 app = typer.Typer()
 
-AWS_REGION = "AWS_REGION"
-BNA_CACHE_AWS_S3_BUCKET = "BNA_CACHE_AWS_S3_BUCKET"
-
 
 @app.command(name="prepare")
 def prepare_cmd(

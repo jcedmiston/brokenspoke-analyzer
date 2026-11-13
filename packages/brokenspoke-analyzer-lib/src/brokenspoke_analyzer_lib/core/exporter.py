@@ -428,11 +428,6 @@ def create_r2_store(
     )  # ty:ignore[no-matching-overload]
 
 
-async def upload_file(store: ObjectStore, path: pathlib.Path) -> None:
-    """Upload a file to the store."""
-    await store.put_async(str(path), path)
-
-
 async def export_to_store(
     store: ObjectStore,
     database_url: str,

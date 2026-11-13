@@ -213,19 +213,6 @@ class BNADataStore:
                 await self._cleanup_partial_cache(path)
                 raise
 
-    async def fetch(
-        self,
-        session: aiohttp.ClientSession,
-        url: str,
-        path: str,
-        *,
-        cache_only: bool = False,
-    ) -> None:
-        """Fetch a file from a URL."""
-        await self.fetch_to_cache(session, url, path)
-        if not cache_only:
-            await self.copy_to_store(path)
-
     async def fetch_from_source(
         self,
         session: aiohttp.ClientSession,
@@ -243,17 +230,6 @@ class BNADataStore:
             datastore = self.store.prefix
             source.prepare(datastore)
             source.validate(datastore)
-
-    async def clear_source(
-        self,
-        source: datasource.SourceAdapter,
-        *,
-        cache_only: bool = False,
-    ) -> None:
-        """Clear file(s) from a SourceAdapter."""
-        await self.cache.delete_async(source.subpath)
-        if not cache_only:
-            await self.store.delete_async(source.subpath)
 
     async def put(
         self,

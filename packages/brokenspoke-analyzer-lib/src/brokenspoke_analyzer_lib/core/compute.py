@@ -517,31 +517,6 @@ def measure(
     execute_sqlfile_with_substitutions(engine, sql_script)
 
 
-def all_(
-    database_url: str,
-    sql_script_dir: pathlib.Path,
-    output_srid: int,
-    state_default_speed: int | None,
-    city_default_speed: int | None,
-    buffer: int = constant.DEFAULT_BUFFER,
-    max_trip_distance: int = constant.DEFAULT_MAX_TRIP_DISTANCE,
-    *,
-    import_jobs: bool,
-) -> None:
-    """Compute all features."""
-    parts(
-        buffer=buffer,
-        city_default_speed=city_default_speed,
-        compute_parts=constant.COMPUTE_PARTS_ALL,
-        database_url=database_url,
-        import_jobs=import_jobs,
-        max_trip_distance=max_trip_distance,
-        output_srid=output_srid,
-        sql_script_dir=sql_script_dir,
-        state_default_speed=state_default_speed,
-    )
-
-
 def parts(
     *,
     database_url: str,

@@ -58,10 +58,6 @@ ComputeParts = Annotated[
     list[constant.ComputePart] | None,
     typer.Option(help="parts of the analysis to compute"),
 ]
-ContainerName = Annotated[
-    str | None,
-    typer.Option(help="give a specific name to the container running the BNA"),
-]
 Country = Annotated[str, typer.Argument()]
 DatabaseURL = Annotated[str, typer.Option(help="database URL", envvar="DATABASE_URL")]
 DataDir = Annotated[
@@ -72,10 +68,6 @@ DataDir = Annotated[
         resolve_path=True,
         help="directory where the files to import are located",
     ),
-]
-DockerImage = Annotated[
-    str | None,
-    typer.Option(help="override the BNA Docker image"),
 ]
 export_dir_kwargs = {
     "file_okay": False,
@@ -112,7 +104,6 @@ SpeedLimit = Annotated[
     int | None,
     typer.Option(help="override the city default speed limit (in mph)"),
 ]
-State = Annotated[str | None, typer.Argument(help="US state")]
 WithBundle = Annotated[bool, typer.Option(help="bundle all the files in a zip archive")]
 WorldPopYear = Annotated[
     int,

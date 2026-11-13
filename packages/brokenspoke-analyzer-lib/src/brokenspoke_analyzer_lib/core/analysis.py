@@ -200,7 +200,7 @@ def create_synthetic_population(
             "GEOID20": [
                 "".join(
                     random.choice(string.ascii_lowercase)  # noqa: S311
-                    for x in range(blockid_len)
+                    for _ in range(blockid_len)
                 )
                 for _ in range(len(cells))
             ],

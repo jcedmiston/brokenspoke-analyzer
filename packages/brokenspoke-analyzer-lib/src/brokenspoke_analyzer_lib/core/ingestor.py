@@ -395,15 +395,6 @@ def rename_neighborhood_tables(engine: Engine) -> None:
     dbcore.execute_query(engine, query)
 
 
-def move_tables(engine: Engine) -> None:
-    """Move some tables to the "received" schema."""
-    query = "ALTER TABLE generated.neighborhood_osm_full_line SET SCHEMA received;"
-    query += "ALTER TABLE generated.neighborhood_osm_full_point SET SCHEMA received;"
-    query += "ALTER TABLE generated.neighborhood_osm_full_polygon SET SCHEMA received;"
-    query += "ALTER TABLE generated.neighborhood_osm_full_roads SET SCHEMA received;"
-    dbcore.execute_query(engine, query)
-
-
 def import_osm_data(
     engine: Engine,
     osm_file: pathlib.Path,
@@ -474,45 +465,6 @@ def import_osm_data(
     logger.info("Importing speed limits...")
     manage_speed_limits(
         engine,
-        state_fips,
-        city_fips,
-        state_speed_limits_csv,
-        city_speed_limits_csv,
-        city_speed_limit_override,
-    )
-
-
-async def import_all(
-    engine: Engine,
-    country: str,
-    output_srid: int,
-    boundary_file: pathlib.Path,
-    population_file: pathlib.Path,
-    input_dir: pathlib.Path,
-    osm_file: pathlib.Path,
-    state_speed_limits_csv: pathlib.Path,
-    city_speed_limits_csv: pathlib.Path,
-    city_fips: str,
-    state: str | None = None,
-    lodes_year: int | None = None,
-    city_speed_limit_override: str | None = None,
-) -> None:
-    """Import all the data."""
-    import_neighborhood(
-        boundary_file=boundary_file,
-        country=country,
-        engine=engine,
-        output_srid=output_srid,
-        population_file=population_file,
-    )
-    state_abbrev, state_fips, run_import_jobs = analysis.derive_state_info(state)
-    logger.debug(f"{run_import_jobs=}")
-    if run_import_jobs:
-        await import_jobs(engine, state_abbrev, lodes_year, input_dir)
-    import_osm_data(
-        engine,
-        osm_file,
-        output_srid,
         state_fips,
         city_fips,
         state_speed_limits_csv,
